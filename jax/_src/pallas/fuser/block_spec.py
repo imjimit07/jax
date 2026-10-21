@@ -2959,9 +2959,13 @@ def push_block_spec(
     jaxpr, _, in_tree, out_tree = fuser_utils.make_jaxpr(f, *args, **kwargs)
     if in_tree != in_tree_:
       raise ValueError(f'Expected {in_tree} PyTree, got {in_tree_}')
+    read_usage_env = compute_usage(
+        jaxpr, [{Usage.REGULAR}] * len(jaxpr.outvars)
+    )
     out_bs = _push_block_spec_jaxpr(
         jaxpr,
         *flat_block_specs,
+        read_usage_env=read_usage_env,
         scalar_prefetch_handler=scalar_prefetch_handler,
         grid_len=grid_len,
         strict_mode=strict_mode,
@@ -3061,6 +3065,7 @@ def push_pull_block_spec(
 def _push_block_spec_jaxpr(
     jaxpr: core.Jaxpr,
     *flat_block_specs,
+    read_usage_env: Callable[[core.Var], set[Usage]],
     scalar_prefetch_handler: Any | None = None,
     grid_len: int | None = None,
     strict_mode: bool = True,
@@ -3077,8 +3082,6 @@ def _push_block_spec_jaxpr(
     env[invar] = bs
   for constvar in jaxpr.constvars:
     env[constvar] = pallas_core.no_block_spec
-
-  read_usage_env = compute_usage(jaxpr, [{Usage.REGULAR}] * len(jaxpr.outvars))
 
   def _read_block_spec(
       atom: core.Atom,
@@ -3368,9 +3371,14 @@ def _call_jaxpr_push_block_spec_rule(
 ):
   if jaxpr.consts or num_consts:
     raise NotImplementedError(f'{ctx.prim.name} with consts not supported yet')
+  # ``SCALAR_PREFETCH`` vars must depend only on ``constvars``, but a call
+  # receives all inputs via ``invars``, so collapse live usage to ``REGULAR``.
+  raw_usage_env = compute_usage(jaxpr, [{Usage.REGULAR}] * len(jaxpr.outvars))
+  read_usage_env = lambda v: {Usage.REGULAR} if raw_usage_env(v) else set()
   return _push_block_spec_jaxpr(
       jaxpr,
       *block_specs,
+      read_usage_env=read_usage_env,
       scalar_prefetch_handler=ctx.scalar_prefetch_handler,
       grid_len=ctx.grid_len,
       strict_mode=ctx.strict_mode,
