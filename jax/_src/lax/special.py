@@ -21,6 +21,7 @@ from enum import Enum
 import numpy as np
 from functools import partial, reduce as _reduce
 
+from jax._src import cloud_tpu_init
 from jax._src import config
 from jax._src import core
 from jax._src.lax.erf import erf_inv_core, erfc_impl, exp_neg_sq
@@ -781,9 +782,14 @@ mlir.register_lowering(
     platform='cpu',
     inline=core.Inline.XLA_LATE,
 )
-# XLA:TPU's post-layout-assignment CallInliner hits tile-layout mismatches when
-# inlining calls inside fused loops; use early inlining on TPU instead.
-mlir.register_lowering(lgamma_p, _lgamma_lowering, platform='tpu', inline=False)
+# TODO(zviki): Remove once minimum libtpu version is at least 0.0.51.
+if not cloud_tpu_init.is_libtpu_at_least('0.0.51'):
+  # XLA:TPU's post-layout-assignment CallInliner in libtpu < 0.0.51 hits
+  # tile-layout mismatches when inlining calls inside fused loops; use early
+  # inlining on TPU instead.
+  mlir.register_lowering(
+      lgamma_p, _lgamma_lowering, platform='tpu', inline=False
+  )
 
 digamma_p = standard_unop(_float, 'digamma')
 mlir.register_lowering(digamma_p, partial(_nary_lower_hlo, chlo.digamma))
